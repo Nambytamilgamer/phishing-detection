@@ -1,29 +1,59 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import discord
+from discord.ext import commands
+import re
 import os
-import google.generativeai as genai
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+intents = discord.Intents.default()
+intents.message_content = True
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-def analyze_text(text):
-    prompt = f"Analyze this message and determine if it is a phishing attempt. Reply with only 'Phishing' or 'Not Phishing':\n{text}"
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        return response.text.strip() if response else "Error: No response from AI"
-    except Exception as e:
-        return f"Error: {str(e)}"
+oil_logs = []
 
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    data = request.json
-    text = data.get('text', '')
-    result = analyze_text(text)
-    return jsonify({'result': result})
+before_pattern = re.compile(r"before[:\-]?\s*(\d+)", re.IGNORECASE)
+after_pattern = re.compile(r"after[:\-]?\s*(\d+)", re.IGNORECASE)
 
-if __name__ == '__main__':
-    app.run(debug=True)
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    content = message.content
+    before_match = before_pattern.search(content)
+    after_match = after_pattern.search(content)
+
+    if before_match and after_match:
+        before = int(before_match.group(1))
+        after = int(after_match.group(1))
+        oil_taken = before - after
+
+        oil_logs.append({
+            "timestamp": message.created_at.isoformat(),
+            "before": before,
+            "after": after,
+            "taken": oil_taken
+        })
+
+        await message.channel.send(
+            f"Oil log recorded.\nBefore: {before}L\nAfter: {after}L\nOil taken: {oil_taken}L"
+        )
+
+    await bot.process_commands(message)
+
+@bot.command()
+async def show_logs(ctx):
+    if not oil_logs:
+        await ctx.send("No logs recorded yet.")
+        return
+
+    msg = "**Oil Logs:**\n"
+    for log in oil_logs[-5:]:
+        msg += f"{log['timestamp']} - Taken: {log['taken']}L (Before: {log['before']}, After: {log['after']})\n"
+
+    await ctx.send(msg)
+
+bot.run(os.environ['TOKEN'])
